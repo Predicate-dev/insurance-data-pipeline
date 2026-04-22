@@ -8,6 +8,12 @@ from typing import Any
 
 DEFAULT_CSV_PATH = Path("driving_log.csv")
 
+RISK_CATEGORY_THRESHOLDS = {
+    # Risk score is 0-100 where lower is better.
+    "Low": 30.0,
+    "Medium": 60.0,
+}
+
 
 @dataclass
 class DriverAggregateStats:
@@ -52,6 +58,10 @@ def calculate_personalized_risk_score(
     )
     return round(clamp(100 - penalty, 0, 100), 1)
 
+def risk_score_from_safety_score(safety_score: float) -> float:
+    # Safety score: higher is better. Risk score: lower is better.
+    return round(clamp(100.0 - float(safety_score), 0.0, 100.0), 1)
+
 
 def summarize_driver(csv_path: Path | str = DEFAULT_CSV_PATH) -> DriverAggregateStats:
     rows = load_trip_rows(csv_path)
@@ -88,6 +98,93 @@ def summarize_driver(csv_path: Path | str = DEFAULT_CSV_PATH) -> DriverAggregate
         total_night_driving_minutes=round(total_night_minutes, 1),
         personalized_risk_score=score,
     )
+
+def _risk_category(risk_score: float) -> str:
+    if risk_score <= RISK_CATEGORY_THRESHOLDS["Low"]:
+        return "Low"
+    if risk_score <= RISK_CATEGORY_THRESHOLDS["Medium"]:
+        return "Medium"
+    return "High"
+
+
+def generate_offline_risk_report(stats: DriverAggregateStats) -> dict[str, Any]:
+    """
+    Deterministic, tweakable coaching report based only on the data.
+
+    Returns a JSON-serializable dict that includes the required keys:
+    - risk_category (Low/Medium/High)
+    - top_risk_factor
+    - coaching_advice
+
+    Additional fields are included to support UI and debugging.
+    """
+    safety_score = float(stats.personalized_risk_score)
+    risk_score = risk_score_from_safety_score(safety_score)
+
+    hb_points = float(stats.avg_hard_braking_events) * 5.0
+    sp_points = float(stats.avg_speeding_events) * 10.0
+    ds_points = float(stats.avg_distraction_score) * 20.0
+
+    if float(stats.avg_duration_minutes) > 0:
+        night_ratio = clamp(float(stats.avg_night_driving_minutes) / float(stats.avg_duration_minutes), 0.0, 1.0)
+    else:
+        night_ratio = 0.0
+
+    # Not part of the base formula, but useful for operational risk context.
+    night_points = min(10.0, night_ratio * 20.0)  # 0..10
+
+    contributions = {
+        "Hard Braking": hb_points,
+        "Speeding": sp_points,
+        "Distraction": ds_points,
+        "Night Driving": night_points,
+    }
+    top_factor = max(contributions, key=contributions.get)
+    category = _risk_category(risk_score)
+
+    if top_factor == "Hard Braking":
+        target = max(0.0, float(stats.avg_hard_braking_events) * 0.7)
+        advice = (
+            f"Harsh stops are the biggest driver of your risk right now. Aim to cut hard braking events by ~30% "
+            f"(target: ≤ {target:.2f} per trip). Increase following distance, scan traffic 8–12 seconds ahead, and "
+            "start easing off the accelerator earlier when you see lights or congestion."
+        )
+    elif top_factor == "Speeding":
+        target = max(0.0, float(stats.avg_speeding_events) * 0.7)
+        advice = (
+            f"Speeding is your main risk driver. Aim to reduce speeding events by ~30% "
+            f"(target: ≤ {target:.2f} per trip). Add a small time buffer, use cruise control when appropriate, and "
+            "treat frequent short bursts as a cue to slow earlier instead of braking late."
+        )
+    elif top_factor == "Distraction":
+        target = max(0.0, float(stats.avg_distraction_score) * 0.8)
+        advice = (
+            f"Phone focus is the biggest opportunity. Aim to reduce your distraction score by ~20% "
+            f"(target: ≤ {target:.2f}). Turn on Do Not Disturb While Driving, start navigation and music before you "
+            "move, and keep the phone out of reach or mounted so you’re not looking down."
+        )
+    else:
+        advice = (
+            "Night driving exposure is elevated. If you can shift trips away from 11 PM–5 AM, you can reduce risk "
+            "meaningfully. Plan earlier departures, batch errands in daylight, and avoid long late-night drives when "
+            "fatigue is more likely."
+        )
+
+    return {
+        "risk_category": category,
+        "top_risk_factor": top_factor,
+        "coaching_advice": advice,
+        "engine": "offline",
+        "risk_score": risk_score,
+        "safety_score": safety_score,
+        "score_breakdown": {
+            "hard_braking_points": round(hb_points, 2),
+            "speeding_points": round(sp_points, 2),
+            "distraction_points": round(ds_points, 2),
+            "night_exposure_points": round(night_points, 2),
+        },
+        "night_driving_ratio": round(night_ratio, 3),
+    }
 
 
 def get_llm_risk_coaching(
@@ -171,6 +268,38 @@ def get_llm_risk_coaching(
         "top_risk_factor": payload["top_risk_factor"],
         "coaching_advice": payload["coaching_advice"],
     }
+
+def get_risk_coaching(
+    stats: DriverAggregateStats,
+    *,
+    model: str = "gpt-4o",
+    api_key: str | None = None,
+    mode: str = "auto",
+) -> dict[str, Any]:
+    """
+    Coaching report generator.
+
+    mode:
+    - "auto": use OpenAI if an API key is available, otherwise offline deterministic report
+    - "llm": force OpenAI (errors if not configured)
+    - "offline": force deterministic report
+    """
+    if mode not in {"auto", "llm", "offline"}:
+        raise ValueError("mode must be one of: auto, llm, offline")
+
+    if mode == "offline":
+        return generate_offline_risk_report(stats)
+
+    has_key = bool(api_key) or bool(os.getenv("OPENAI_API_KEY"))
+    if mode == "auto" and not has_key:
+        return generate_offline_risk_report(stats)
+
+    llm = get_llm_risk_coaching(stats, model=model, api_key=api_key)
+    # Attach deterministic computed fields so the UI can render consistently.
+    llm["engine"] = "openai"
+    llm["risk_score"] = risk_score_from_safety_score(float(stats.personalized_risk_score))
+    llm["safety_score"] = float(stats.personalized_risk_score)
+    return llm
 
 
 def analyze_driver(csv_path: Path | str = DEFAULT_CSV_PATH, model: str = "gpt-4o") -> dict[str, Any]:

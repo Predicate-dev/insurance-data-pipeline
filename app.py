@@ -10,7 +10,7 @@ import streamlit as st
 from analysis_engine import (
     DriverAggregateStats,
     calculate_personalized_risk_score,
-    get_llm_risk_coaching,
+    get_risk_coaching,
     summarize_driver,
 )
 
@@ -701,7 +701,7 @@ def main() -> None:
     if generate:
         st.session_state["llm_error"] = None
         try:
-            summary = get_llm_risk_coaching(stats, model=model, api_key=openai_key or None)
+            summary = get_risk_coaching(stats, model=model, api_key=openai_key or None, mode="auto")
             st.session_state["llm_summary"] = summary
         except Exception as exc:  # keep the UI resilient for hackathon demos
             st.session_state["llm_error"] = str(exc)
@@ -709,14 +709,14 @@ def main() -> None:
 
     if st.session_state["llm_error"]:
         st.warning(f"AI coaching unavailable: {st.session_state['llm_error']}")
-        st.caption("Tip: install `openai` and provide an API key to enable coaching.")
+        st.caption("Tip: provide an API key to enable OpenAI coaching. Offline coaching is available without a key.")
 
     if st.session_state["llm_summary"]:
         coaching_box(st.session_state["llm_summary"])
         with st.expander("Raw JSON"):
             st.code(json.dumps(st.session_state["llm_summary"], indent=2), language="json")
     else:
-        st.caption("Click the button to generate coaching advice (requires OpenAI API key).")
+        st.caption("Click the button to generate coaching advice (offline deterministic if no API key is set).")
 
     st.markdown("### Trips (Preview)")
     st.dataframe(df.head(max_trips), use_container_width=True, height=320)

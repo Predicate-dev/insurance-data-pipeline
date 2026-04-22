@@ -1,6 +1,6 @@
 # ClearClaim: Driver Insights Pro
 
-ClearClaim Pro is a hackathon-ready telematics analysis dashboard that turns raw trip logs into an underwriting-friendly risk score, interactive visualizations, and AI-generated coaching advice.
+ClearClaim Pro is a telematics analysis dashboard that turns raw trip logs into an underwriting-friendly risk score, interactive visualizations, and AI-generated coaching advice.Additionally, for people not wishing to use AI API keys, there is a deterministic calculation process which you can visualize with some of the sample data!
 
 It is designed to feel like an enterprise demo for insurance and mobility companies: data-dense, explainable, and fast to evaluate.
 
