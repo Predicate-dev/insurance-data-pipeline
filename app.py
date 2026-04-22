@@ -2,10 +2,13 @@ import json
 from dataclasses import asdict
 import os
 from pathlib import Path
+from datetime import datetime
+import hashlib
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 from analysis_engine import (
     DriverAggregateStats,
@@ -23,6 +26,13 @@ SIDEBAR_BG = "#1E3246"
 SURFACE = "#FFFFFF"
 
 SAMPLE_DATA_PATH = Path("driving_log.csv")
+SAMPLE_DATASETS = [
+    ("Low Risk Commuter", Path("sample_1_low_risk_commuter.csv")),
+    ("Medium Risk Mixed Driver", Path("sample_2_medium_risk_mixed.csv")),
+    ("High Risk Aggressive Driver", Path("sample_3_high_risk_aggressive.csv")),
+    ("Night Owl (High Exposure)", Path("sample_4_night_owl.csv")),
+    ("Distracted Driver", Path("sample_5_distracted_driver.csv")),
+]
 
 REQUIRED_COLUMNS = [
     "trip_id",
@@ -252,9 +262,126 @@ def sidebar_section(title: str, icon_svg: str) -> None:
         unsafe_allow_html=True,
     )
 
+def record_history(event: str, payload: dict) -> None:
+    if "history" not in st.session_state:
+        st.session_state["history"] = []
+    st.session_state["history"].insert(
+        0,
+        {
+            "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "event": event,
+            **payload,
+        },
+    )
+
+def sidebar_hover_reopen_control() -> None:
+    # This overlays a thin hover target at the far-left edge of the viewport. When the sidebar
+    # is collapsed, the user can hover near the edge and click to reopen it.
+    components.html(
+        f"""
+<style>
+  .cc-hover-zone {{
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 22px;
+    height: 100vh;
+    z-index: 9999;
+    pointer-events: none; /* do not block Streamlit's own sidebar toggle */
+  }}
+  .cc-hover-btn {{
+    position: absolute;
+    left: 6px;
+    top: 120px;
+    width: 34px;
+    height: 34px;
+    border-radius: 12px;
+    border: 1px solid rgba(0,0,0,0.08);
+    background: rgba(255,255,255,0.96);
+    box-shadow: 0 10px 22px rgba(26,43,60,0.14);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: {NAVY};
+    font-weight: 900;
+    opacity: 0;
+    transform: translateX(-6px);
+    transition: opacity 140ms ease, transform 140ms ease;
+    pointer-events: auto;
+  }}
+  .cc-hover-zone:hover .cc-hover-btn {{
+    opacity: 1;
+    transform: translateX(0);
+  }}
+</style>
+<div class="cc-hover-zone">
+  <button class="cc-hover-btn" id="ccOpenSidebar" title="Open sidebar">›</button>
+</div>
+<script>
+  (function() {{
+    const tryClick = () => {{
+      const selectors = [
+        '[data-testid="collapsedControl"] button',
+        '[data-testid="collapsedControl"]',
+        '[data-testid="stSidebarCollapsedControl"] button',
+        'button[title="Open sidebar"]',
+        'button[aria-label="Open sidebar"]'
+      ];
+      for (const sel of selectors) {{
+        const el = document.querySelector(sel);
+        if (el) {{ el.click(); return true; }}
+      }}
+      return false;
+    }};
+
+    document.getElementById('ccOpenSidebar')?.addEventListener('click', (e) => {{
+      e.preventDefault();
+      tryClick();
+    }});
+  }})();
+</script>
+""",
+        height=0,
+        width=0,
+    )
+
 
 def main() -> None:
-    st.set_page_config(page_title="Telematics Risk Dashboard", layout="wide")
+    st.set_page_config(page_title="Telematics Risk Dashboard", layout="wide", initial_sidebar_state="expanded")
+
+    # Navigation/state reset must happen before widgets are instantiated (Streamlit limitation).
+    if st.session_state.pop("_go_home", False):
+        for key in [
+            "sample_path",
+            "llm_summary",
+            "llm_error",
+            "history",
+        ]:
+            st.session_state.pop(key, None)
+        # Clear the file uploader widget state (safe only before the widget is created).
+        st.session_state.pop("driving_csv_uploader", None)
+
+    # Home navigation via query param (lets the logo be a plain link).
+    home_qp_val = None
+    try:
+        home_qp_val = st.query_params.get("home")
+    except Exception:
+        try:
+            home_qp_val = st.experimental_get_query_params().get("home", [None])[0]
+        except Exception:
+            home_qp_val = None
+
+    home_clicked = (home_qp_val == "1") or (isinstance(home_qp_val, list) and "1" in home_qp_val)
+    if home_clicked:
+        record_history("action", {"detail": "home_clicked"})
+        for key in ["sample_path", "llm_summary", "llm_error"]:
+            st.session_state.pop(key, None)
+        st.session_state.pop("driving_csv_uploader", None)
+        try:
+            st.query_params.clear()
+        except Exception:
+            st.experimental_set_query_params()
+        st.rerun()
 
     st.markdown(
         f"""
@@ -273,18 +400,19 @@ def main() -> None:
     --border: rgba(26,43,60,0.14);
   }}
 
-  /* Hide Streamlit chrome so custom header is truly top-aligned */
+  /* Ensure Streamlit’s built-in header + sidebar toggle remain visible */
   header[data-testid="stHeader"] {{
-    display: none;
+    background: #FFFFFF;
+    border-bottom: 1px solid var(--header-border);
   }}
-  [data-testid="stToolbar"] {{
-    display: none;
+  [data-testid="collapsedControl"] {{
+    background: rgba(255,255,255,0.98);
+    border: 1px solid rgba(26,43,60,0.10);
+    border-radius: 14px;
+    padding: 2px;
   }}
-  [data-testid="stDecoration"] {{
-    display: none;
-  }}
-  #MainMenu {{
-    visibility: hidden;
+  [data-testid="collapsedControl"] button {{
+    color: var(--navy) !important;
   }}
 
   html, body, [class*="css"] {{
@@ -292,7 +420,7 @@ def main() -> None:
   }}
 
   .block-container {{
-    padding-top: 0rem;
+    padding-top: 0.6rem;
     padding-left: 1.6rem;
     padding-right: 1.6rem;
     background: var(--surface);
@@ -487,57 +615,80 @@ def main() -> None:
     background: var(--green);
   }}
 
-  /* Top bar styling: target the horizontal block immediately after the anchor */
-  #topbar-anchor + div[data-testid="stHorizontalBlock"] {{
-    background: #FFFFFF !important;
-    border: 1px solid var(--header-border) !important;
-    border-bottom: 1px solid var(--header-border) !important;
+  /* Top bar (self-contained, not dependent on Streamlit internal layout wrappers) */
+  .cc-topbar {{
+    background: #FFFFFF;
+    border: 1px solid var(--header-border);
     border-radius: 18px;
-    padding: 14px 14px;
+    padding: 14px 16px;
     box-shadow: 0 10px 28px rgba(26,43,60,0.07);
     margin-top: 14px;
     margin-bottom: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
   }}
-  #topbar-anchor + div[data-testid="stHorizontalBlock"] * {{
-    color: var(--navy) !important;
+  .cc-topbar * {{
+    color: var(--navy);
   }}
-  #topbar-anchor + div[data-testid="stHorizontalBlock"] div {{
-    background: transparent !important;
+  .cc-topbar-left {{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 260px;
   }}
-  .topbar-title {{
+  .cc-logo-link {{
+    display: inline-flex;
+    width: 52px;
+    height: 52px;
+    padding: 0;
+    border-radius: 14px;
+    border: 1px solid rgba(26,43,60,0.10);
+    background: rgba(255,255,255,0.98);
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    cursor: pointer;
+    transition: box-shadow 140ms ease;
+    flex: 0 0 auto;
+  }}
+  .cc-logo-link:hover {{
+    box-shadow: 0 10px 22px rgba(26,43,60,0.10);
+  }}
+  .cc-logo-link svg {{
+    display: block;
+  }}
+  .cc-topbar-title {{
     font-size: 26px;
     font-weight: 950;
-    color: var(--navy) !important;
     line-height: 1.1;
-    margin-top: 2px;
   }}
-  .topbar-sub {{
-    color: var(--navy) !important;
+  .cc-topbar-sub {{
     opacity: 0.72;
     font-weight: 650;
     margin-top: 6px;
   }}
-  .cluster {{
+  .cc-cluster {{
     display: flex;
     justify-content: flex-end;
     flex-wrap: wrap;
     gap: 8px;
-    margin-top: 6px;
   }}
-  .pill {{
+  .cc-pill {{
     display: inline-flex;
     align-items: center;
     gap: 8px;
     border-radius: 999px;
     padding: 6px 10px;
-    background: var(--pill-bg) !important;
-    border: 1px solid #E6E9EF !important;
-    color: var(--navy) !important;
+    background: var(--pill-bg);
+    border: 1px solid #E6E9EF;
     font-size: 12px;
     font-weight: 750;
+    white-space: nowrap;
   }}
-  .pill b {{
-    color: rgba(26,43,60,0.65) !important;
+  .cc-pill b {{
+    color: rgba(26,43,60,0.65);
     font-weight: 800;
   }}
 </style>
@@ -545,9 +696,25 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
+    # Sidebar open/close is handled by Streamlit's built-in control (top-left).
+
     with st.sidebar:
         sidebar_section("Upload", ICON_FILE)
-        file = st.file_uploader("Driving log CSV", type=["csv"])
+        file = st.file_uploader("Driving log CSV", type=["csv"], key="driving_csv_uploader")
+        if "sample_path" not in st.session_state:
+            st.session_state["sample_path"] = None
+
+        sample_names = [name for name, _ in SAMPLE_DATASETS]
+        sample_choice = st.selectbox("Or load a sample dataset", ["None"] + sample_names, index=0)
+        if sample_choice != "None":
+            chosen = dict(SAMPLE_DATASETS)[sample_choice]
+            if chosen.exists():
+                st.session_state["sample_path"] = str(chosen)
+
+        if st.session_state.get("sample_path") and st.button("Clear sample selection"):
+            st.session_state["sample_path"] = None
+            record_history("action", {"detail": "cleared_sample"})
+
         st.sidebar.divider()
 
         sidebar_section("AI Settings", ICON_GEAR)
@@ -585,35 +752,33 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-    data_status = "Ready" if file else "Awaiting Data"
+    using_sample = bool(st.session_state.get("sample_path")) and (not file)
+    data_status = "Ready" if file else ("Ready (Sample)" if using_sample else "Awaiting Data")
     ai_level = "standard"
     credits = "Active" if api_active else "Inactive"
+    source_label = "No data loaded"
 
-    st.markdown('<div id="topbar-anchor"></div>', unsafe_allow_html=True)
-    top_left, top_mid, top_right = st.columns([1, 4, 3], vertical_alignment="center")
-    with top_left:
-        st.markdown(LOGO_SVG, unsafe_allow_html=True)
-    with top_mid:
-        st.markdown(
-            """
-<div class="topbar-title">ClearClaim: Driver Insights Pro</div>
-<div class="topbar-sub">Enterprise telematics scoring for underwriting, fleet risk, and driver coaching.</div>
-""",
-            unsafe_allow_html=True,
-        )
-    with top_right:
-        st.markdown(
-            f"""
-<div class="cluster">
-  <span class="pill"><b>Data Status:</b> {data_status}</span>
-  <span class="pill"><b>AI Level:</b> {ai_level}</span>
-  <span class="pill"><b>Credits:</b> {credits}</span>
+    st.markdown(
+        f"""
+<div class="cc-topbar">
+  <div class="cc-topbar-left">
+    <a class="cc-logo-link" href="?home=1" title="Home">{LOGO_SVG}</a>
+    <div>
+      <div class="cc-topbar-title">ClearClaim: Driver Insights Pro</div>
+      <div class="cc-topbar-sub">Enterprise telematics scoring for underwriting, fleet risk, and driver coaching.</div>
+    </div>
+  </div>
+  <div class="cc-cluster">
+    <span class="cc-pill"><b>Data Status:</b> {data_status}</span>
+    <span class="cc-pill"><b>AI Level:</b> {ai_level}</span>
+    <span class="cc-pill"><b>Credits:</b> {credits}</span>
+  </div>
 </div>
 """,
-            unsafe_allow_html=True,
-        )
+        unsafe_allow_html=True,
+    )
 
-    if not file:
+    if (not file) and (not using_sample):
         st.markdown(
             """
 <div class="hero">
@@ -640,9 +805,38 @@ def main() -> None:
                 st.caption("Tip: download, then upload it from the sidebar to see the full dashboard.")
             else:
                 st.warning("Sample data is not available in this workspace.")
+
+        st.markdown("#### Sample Scenarios (One Click)")
+        cols = st.columns(5)
+        for idx, (label, path) in enumerate(SAMPLE_DATASETS):
+            with cols[idx]:
+                if not path.exists():
+                    st.caption("Missing")
+                    continue
+
+                if st.button(label, key=f"load_{path.name}"):
+                    st.session_state["sample_path"] = str(path)
+                    record_history("load_sample", {"sample": path.name})
+                    st.rerun()
+
+                st.download_button(
+                    "Download",
+                    data=path.read_bytes(),
+                    file_name=path.name,
+                    mime="text/csv",
+                    type="primary",
+                    key=f"dl_{path.name}",
+                )
         return
 
-    df = pd.read_csv(file)
+    if file:
+        df = pd.read_csv(file)
+        source_label = "Uploaded CSV"
+    else:
+        df = pd.read_csv(Path(st.session_state["sample_path"]))
+        source_label = f"Sample: {Path(st.session_state['sample_path']).name}"
+
+    st.caption(source_label)
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         st.error(f"Missing required columns: {', '.join(missing)}")
@@ -670,6 +864,47 @@ def main() -> None:
     with st.sidebar:
         st.metric("Projected Premium", f"${projected_premium:,.0f}/yr")
         st.metric("Potential Savings", f"${yearly_savings:,.0f}/yr")
+        st.sidebar.divider()
+        sidebar_section("History", ICON_CHART)
+        if st.button("Save Dashboard Snapshot"):
+            snapshot_key = hashlib.sha256(
+                f"{source_label}|{risk_score}|{base_premium}|{reduce_hb}|{limit_night}|{improve_focus}".encode("utf-8")
+            ).hexdigest()[:10]
+            record_history(
+                "snapshot",
+                {
+                    "id": snapshot_key,
+                    "source": source_label,
+                    "risk_score": risk_score,
+                    "projected_risk_score": proj_risk,
+                    "base_premium": float(base_premium),
+                    "current_premium": current_premium,
+                    "projected_premium": projected_premium,
+                    "yearly_savings": yearly_savings,
+                    "sample_path": st.session_state.get("sample_path"),
+                    "sliders": {
+                        "reduce_hb": int(reduce_hb),
+                        "limit_night": int(limit_night),
+                        "improve_focus": int(improve_focus),
+                    },
+                },
+            )
+
+        if st.session_state.get("history"):
+            items = st.session_state["history"][:12]
+            labels = [
+                f"{h['ts']} · {h.get('event','')} · {h.get('source', h.get('detail',''))}".strip()
+                for h in items
+            ]
+            chosen = st.selectbox("Recent activity", options=list(range(len(items))), format_func=lambda i: labels[i])
+            selected = items[chosen]
+            st.caption(f"Selected: {selected.get('event','')}")
+            if selected.get("event") in {"load_sample", "snapshot"} and selected.get("sample_path"):
+                if st.button("Reopen This Sample"):
+                    st.session_state["sample_path"] = selected["sample_path"]
+                    st.rerun()
+            with st.expander("Details"):
+                st.code(json.dumps(selected, indent=2), language="json")
 
     with st.container(border=True):
         m1, m2, m3 = st.columns(3)
