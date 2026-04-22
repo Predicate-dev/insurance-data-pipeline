@@ -185,3 +185,49 @@ This section is a **write-up only** (no implementation yet).
 - Encrypt at rest + in transit, and separate identifiers from telemetry where possible.
 - Make export/delete easy; track consent changes and sharing revocations.
 - Be explicit about what “distraction” means (proxy signals, not content).
+
+## OEM / In-Vehicle Sensor Integration (Future Idea)
+
+ClearClaim Pro could also be positioned as a **vehicle-integrated safety analytics layer**, working with car manufacturers (OEMs), fleets, or aftermarket hardware partners to collect higher-fidelity driving signals than a phone-only approach.
+
+This section is a **write-up only** (no implementation yet).
+
+### Why OEM + In-Vehicle Sensors
+
+- **Higher quality signals:** Vehicle-side sensors (CAN bus/OBD-II signals, wheel speed, brake pressure, steering angle) improve event detection accuracy for braking/acceleration and reduce false positives.
+- **Consistent sampling:** Data quality is less device-dependent than mobile sensors (which vary by phone model and mounting).
+- **Broader use cases:** Beyond insurance, this supports maintenance insights, driver coaching, fleet safety, and mobility partner programs.
+
+### Integration Options
+
+- **OEM APIs (preferred):**
+  - Integrate with manufacturer telematics APIs where available (consent-based, account-linked).
+  - Receive normalized trip summaries or raw signals depending on the OEM program.
+- **OBD-II / CAN bus dongle (aftermarket):**
+  - A plug-in device paired with the ClearClaim mobile app (BLE/LTE).
+  - Captures speed/braking/throttle signals and uploads trip summaries.
+- **Embedded sensor module (fleet/OEM partnerships):**
+  - A small in-vehicle module installed by a fleet or dealer network.
+  - Secure hardware identity + attested uploads to strengthen “proof” reports.
+
+### What Data Could Be Captured (Examples)
+
+- Braking intensity and duration (brake pressure / decel)
+- Acceleration patterns (throttle position, longitudinal accel)
+- Speed variance and harsh cornering (wheel speed + steering angle)
+- Idling time and route risk context (time-of-day, road type)
+- Vehicle health proxies (DTC codes, battery/engine signals) for ops, not just pricing
+
+### Business Impact (Uber / Logistics Angle)
+
+For mobility platforms and fleets, OEM-grade telemetry enables **driver performance ratings** that are more objective and actionable than customer-star ratings alone:
+
+- **Safety rating:** consistent measure of harsh events, speeding, distraction proxies, and night exposure.
+- **Coaching loops:** targeted guidance tied to measurable improvement (and incentives).
+- **Operational KPIs:** fewer incidents, lower downtime, more consistent ride quality.
+
+### Guardrails
+
+- Keep it opt-in and transparent: users should understand exactly what’s collected and why.
+- Offer granular sharing: insurers vs fleet managers vs “personal-only” insights.
+- Minimize retention and store summaries when possible; keep raw signals only when necessary for verification/debugging.
